@@ -1,16 +1,8 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -40,11 +32,12 @@
 #include "soc/rtc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "soc/soc_memory_layout.h"
-#include "esp_clk.h"
+#include "esp32c3/clk.h"
 #include "esp_coexist_internal.h"
 #include "esp32c3/rom/rom_layout.h"
 #include "esp_timer.h"
 #include "esp_sleep.h"
+#include "phy.h"
 
 #if CONFIG_BT_ENABLED
 
@@ -212,6 +205,7 @@ extern void btdm_controller_disable(void);
 extern uint8_t btdm_controller_get_mode(void);
 extern const char *btdm_controller_get_compile_version(void);
 extern void btdm_rf_bb_init_phase2(void); // shall be called after PHY/RF is enabled
+
 /* Sleep */
 extern void btdm_controller_enable_sleep(bool enable);
 extern uint8_t btdm_controller_get_sleep_mode(void);
@@ -407,7 +401,7 @@ static DRAM_ATTR esp_pm_lock_handle_t s_light_sleep_pm_lock;
 void IRAM_ATTR btdm_hw_mac_power_down_wrapper(void)
 {
 #if CONFIG_MAC_BB_PD
-    // le module power down
+    // Bluetooth module power down
     SET_PERI_REG_MASK(RTC_CNTL_DIG_ISO_REG, RTC_CNTL_BT_FORCE_ISO);
     SET_PERI_REG_MASK(RTC_CNTL_DIG_PWC_REG, RTC_CNTL_BT_FORCE_PD);
 
@@ -418,12 +412,28 @@ void IRAM_ATTR btdm_hw_mac_power_down_wrapper(void)
 void IRAM_ATTR btdm_hw_mac_power_up_wrapper(void)
 {
 #if CONFIG_MAC_BB_PD
-    // le module power up
+    // Bluetooth module power up
     CLEAR_PERI_REG_MASK(RTC_CNTL_DIG_PWC_REG, RTC_CNTL_BT_FORCE_PD);
     CLEAR_PERI_REG_MASK(RTC_CNTL_DIG_ISO_REG, RTC_CNTL_BT_FORCE_ISO);
 
     esp_mac_bb_power_up();
 #endif
+}
+
+static inline void esp_bt_power_domain_on(void)
+{
+    // Bluetooth module power up
+    CLEAR_PERI_REG_MASK(RTC_CNTL_DIG_PWC_REG, RTC_CNTL_BT_FORCE_PD);
+    CLEAR_PERI_REG_MASK(RTC_CNTL_DIG_ISO_REG, RTC_CNTL_BT_FORCE_ISO);
+    esp_wifi_bt_power_domain_on();
+}
+
+static inline void esp_bt_power_domain_off(void)
+{
+    // Bluetooth module power down
+    SET_PERI_REG_MASK(RTC_CNTL_DIG_ISO_REG, RTC_CNTL_BT_FORCE_ISO);
+    SET_PERI_REG_MASK(RTC_CNTL_DIG_PWC_REG, RTC_CNTL_BT_FORCE_PD);
+    esp_wifi_bt_power_domain_off();
 }
 
 void IRAM_ATTR btdm_backup_dma_copy_wrapper(uint32_t reg, uint32_t mem_addr, uint32_t num,  bool to_mem)
@@ -709,10 +719,6 @@ static void btdm_sleep_exit_phase3_wrapper(void)
     }
 #endif
 
-    if(btdm_sleep_clock_sync()) {
-        ESP_LOGE(BTDM_LOG_TAG, "sleep eco state err\n");
-        assert(0);
-    }
     if (btdm_controller_get_sleep_mode() == ESP_BT_SLEEP_MODE_1) {
         if (s_lp_stat.phy_enabled == 0) {
             esp_phy_enable();
@@ -726,6 +732,12 @@ static void btdm_sleep_exit_phase3_wrapper(void)
     if (s_lp_cntl.wakeup_timer_required && s_lp_stat.wakeup_timer_started) {
         esp_timer_stop(s_btdm_slp_tmr);
         s_lp_stat.wakeup_timer_started = 0;
+    }
+
+    // wait for the sleep state to change
+    // the procedure duration is at micro-second level or less
+    while (btdm_sleep_clock_sync()) {
+        ;
     }
 }
 
@@ -953,6 +965,11 @@ esp_err_t esp_bt_controller_init(esp_bt_controller_config_t *cfg)
     // overwrite some parameters
     cfg->magic = ESP_BT_CTRL_CONFIG_MAGIC_VAL;
 
+#if CONFIG_MAC_BB_PD
+    esp_mac_bb_pd_mem_init();
+#endif
+    esp_bt_power_domain_on();
+
     btdm_controller_mem_init();
 
 #if CONFIG_MAC_BB_PD
@@ -989,7 +1006,7 @@ esp_err_t esp_bt_controller_init(esp_bt_controller_config_t *cfg)
 
         // configure and initialize resources
         s_lp_cntl.enable = (cfg->sleep_mode == ESP_BT_SLEEP_MODE_1) ? 1 : 0;
-        s_lp_cntl.no_light_sleep = 0;
+        s_lp_cntl.no_light_sleep = 1;
 
         if (s_lp_cntl.enable) {
 #if (CONFIG_MAC_BB_PD)
@@ -1026,31 +1043,29 @@ esp_err_t esp_bt_controller_init(esp_bt_controller_config_t *cfg)
         btdm_lpcycle_us_frac = RTC_CLK_CAL_FRACT;
         btdm_lpcycle_us = 2 << (btdm_lpcycle_us_frac);
 
-        // // set default bluetooth sleep clock source
-        // s_lp_cntl.lpclk_sel = BTDM_LPCLK_SEL_XTAL;
+        // set default bluetooth sleep clock source
+        s_lp_cntl.lpclk_sel = BTDM_LPCLK_SEL_XTAL;  // set default value
 #if CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL
         // check whether or not EXT_CRYS is working
         if (rtc_clk_slow_freq_get() == RTC_SLOW_FREQ_32K_XTAL) {
-            s_lp_cntl.lpclk_sel = BTDM_LPCLK_SEL_XTAL32K; // set default value
-// #ifdef CONFIG_PM_ENABLE
-//             s_btdm_allow_light_sleep = true;
-// #endif
+            s_lp_cntl.lpclk_sel = BTDM_LPCLK_SEL_XTAL32K; // External 32 kHz XTAL
+            s_lp_cntl.no_light_sleep = 0;
         } else {
             ESP_LOGW(BTDM_LOG_TAG, "32.768kHz XTAL not detected, fall back to main XTAL as Bluetooth sleep clock\n"
                  "light sleep mode will not be able to apply when bluetooth is enabled");
-            s_lp_cntl.lpclk_sel = BTDM_LPCLK_SEL_XTAL; // set default value
         }
 #elif (CONFIG_BT_CTRL_LPCLK_SEL_RTC_SLOW)
         // check whether or not EXT_CRYS is working
         if (rtc_clk_slow_freq_get() == RTC_SLOW_FREQ_RTC) {
-            s_lp_cntl.lpclk_sel = BTDM_LPCLK_SEL_RTC_SLOW; // set default value
+            s_lp_cntl.lpclk_sel = BTDM_LPCLK_SEL_RTC_SLOW; // Internal 150 kHz RC oscillator
+            ESP_LOGW(BTDM_LOG_TAG, "Internal 150kHz RC osciallator. The accuracy of this clock is a lot larger than 500ppm which is "
+                 "required in Bluetooth communication, so don't select this option in scenarios such as BLE connection state.");
         } else {
-            ESP_LOGW(BTDM_LOG_TAG, "Internal 90kHz RC oscillator not detected, fall back to main XTAL as Bluetooth sleep clock\n"
-                 "light sleep mode will not be able to apply when bluetooth is enabled");
-            s_lp_cntl.lpclk_sel = BTDM_LPCLK_SEL_XTAL; // set default value
+            ESP_LOGW(BT_LOG_TAG, "Internal 150kHz RC oscillator not detected.");
+            assert(0);
         }
 #else
-        s_lp_cntl.lpclk_sel = BTDM_LPCLK_SEL_XTAL; // set default value
+        s_lp_cntl.no_light_sleep = 1;
 #endif
 
         bool select_src_ret __attribute__((unused));
@@ -1222,6 +1237,14 @@ esp_err_t esp_bt_controller_deinit(void)
     esp_unregister_mac_bb_pd_callback(btdm_mac_bb_power_down_cb);
     esp_unregister_mac_bb_pu_callback(btdm_mac_bb_power_up_cb);
 #endif
+
+    /* Fix the issue caused by the power off the bt power domain.
+     * This issue is only on ESP32C3.
+     */
+    phy_init_flag();
+
+    esp_bt_power_domain_off();
+
     free(osi_funcs_p);
     osi_funcs_p = NULL;
 
@@ -1335,14 +1358,51 @@ esp_bt_controller_status_t esp_bt_controller_get_status(void)
 /* extra functions */
 esp_err_t esp_ble_tx_power_set(esp_ble_power_type_t power_type, esp_power_level_t power_level)
 {
-    ESP_LOGW(BTDM_LOG_TAG, "%s not implemented, return OK", __func__);
-    return ESP_OK;
+    esp_err_t stat = ESP_FAIL;
+
+    switch (power_type) {
+    case ESP_BLE_PWR_TYPE_ADV:
+    case ESP_BLE_PWR_TYPE_SCAN:
+    case ESP_BLE_PWR_TYPE_DEFAULT:
+        if (ble_txpwr_set(power_type, power_level) == 0) {
+            stat = ESP_OK;
+        }
+        break;
+    default:
+        stat = ESP_ERR_NOT_SUPPORTED;
+        break;
+    }
+
+    return stat;
 }
 
 esp_power_level_t esp_ble_tx_power_get(esp_ble_power_type_t power_type)
 {
-    ESP_LOGW(BTDM_LOG_TAG, "%s not implemented, return 0", __func__);
-    return 0;
+    esp_power_level_t lvl;
+
+    switch (power_type) {
+    case ESP_BLE_PWR_TYPE_ADV:
+    case ESP_BLE_PWR_TYPE_SCAN:
+        lvl = (esp_power_level_t)ble_txpwr_get(power_type);
+        break;
+    case ESP_BLE_PWR_TYPE_CONN_HDL0:
+    case ESP_BLE_PWR_TYPE_CONN_HDL1:
+    case ESP_BLE_PWR_TYPE_CONN_HDL2:
+    case ESP_BLE_PWR_TYPE_CONN_HDL3:
+    case ESP_BLE_PWR_TYPE_CONN_HDL4:
+    case ESP_BLE_PWR_TYPE_CONN_HDL5:
+    case ESP_BLE_PWR_TYPE_CONN_HDL6:
+    case ESP_BLE_PWR_TYPE_CONN_HDL7:
+    case ESP_BLE_PWR_TYPE_CONN_HDL8:
+    case ESP_BLE_PWR_TYPE_DEFAULT:
+        lvl = (esp_power_level_t)ble_txpwr_get(ESP_BLE_PWR_TYPE_DEFAULT);
+        break;
+    default:
+        lvl = ESP_PWR_LVL_INVALID;
+        break;
+    }
+
+    return lvl;
 }
 
 esp_err_t esp_bt_sleep_enable (void)

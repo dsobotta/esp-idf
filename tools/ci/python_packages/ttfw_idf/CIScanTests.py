@@ -6,6 +6,11 @@ import os
 from collections import defaultdict
 from copy import deepcopy
 
+try:
+    from typing import Any
+except ImportError:
+    # Only used for type annotations
+    pass
 from find_apps import find_apps
 from find_build_apps import BUILD_SYSTEM_CMAKE, BUILD_SYSTEMS
 from idf_py_actions.constants import PREVIEW_TARGETS, SUPPORTED_TARGETS
@@ -28,14 +33,14 @@ BUILD_ALL_LABELS = [
 ]
 
 
-def _has_build_all_label():
+def _has_build_all_label():  # type: () -> bool
     for label in BUILD_ALL_LABELS:
         if os.getenv(label):
             return True
     return False
 
 
-def _judge_build_or_not(action, build_all):  # type: (str, bool) -> (bool, bool)
+def _judge_build_or_not(action, build_all):  # type: (str, bool) -> tuple[bool, bool]
     """
     :return: (build_or_not_for_test_related_apps, build_or_not_for_non_related_apps)
     """
@@ -45,7 +50,7 @@ def _judge_build_or_not(action, build_all):  # type: (str, bool) -> (bool, bool)
 
     labels = TEST_LABELS[action]
     if not isinstance(labels, list):
-        labels = [labels]
+        labels = [labels]  # type: ignore
 
     for label in labels:
         if os.getenv(label):
@@ -55,13 +60,23 @@ def _judge_build_or_not(action, build_all):  # type: (str, bool) -> (bool, bool)
     return False, False
 
 
-def output_json(apps_dict_list, target, build_system, output_dir):
+def output_json(apps_dict_list, target, build_system, output_dir):  # type: (list, str, str, str) -> None
     output_path = os.path.join(output_dir, 'scan_{}_{}.json'.format(target.lower(), build_system))
     with open(output_path, 'w') as fw:
         fw.writelines([json.dumps(app) + '\n' for app in apps_dict_list])
 
 
-def main():
+# we might need artifacts to run test cases locally.
+# So we need to save artifacts which have test case not executed by CI.
+class _ExampleAssignTest(ExampleAssignTest):
+    DEFAULT_FILTER = {}  # type: dict[str, Any]
+
+
+class _TestAppsAssignTest(TestAppsAssignTest):
+    DEFAULT_FILTER = {}  # type: dict[str, Any]
+
+
+def main():  # type: () -> None
     parser = argparse.ArgumentParser(description='Scan the required build tests')
     parser.add_argument('test_type',
                         choices=TEST_LABELS.keys(),
@@ -79,7 +94,9 @@ def main():
                         help='output path of the scan result')
     parser.add_argument('--exclude', nargs='*',
                         help='Ignore specified directory. Can be used multiple times.')
-    parser.add_argument('--preserve', action='store_true',
+    parser.add_argument('--extra_test_dirs', nargs='*',
+                        help='Additional directories to preserve artifacts for local tests')
+    parser.add_argument('--preserve_all', action='store_true',
                         help='add this flag to preserve artifacts for all apps')
     parser.add_argument('--build-all', action='store_true',
                         help='add this flag to build all apps')
@@ -101,17 +118,17 @@ def main():
             output_json([], target, args.build_system, args.output_path)
             SystemExit(0)
 
-    paths = set([os.path.join(os.getenv('IDF_PATH'), path) if not os.path.isabs(path) else path for path in args.paths])
+    idf_path = str(os.getenv('IDF_PATH'))
+    paths = set([os.path.join(idf_path, path) if not os.path.isabs(path) else path for path in args.paths])
 
     test_cases = []
     for path in paths:
         if args.test_type == 'example_test':
-            assign = ExampleAssignTest(path, args.ci_config_file)
+            assign = _ExampleAssignTest(path, args.ci_config_file)
         elif args.test_type in ['test_apps', 'component_ut']:
-            assign = TestAppsAssignTest(path, args.ci_config_file)
+            assign = _TestAppsAssignTest(path, args.ci_config_file)
         else:
             raise SystemExit(1)  # which is impossible
-
         test_cases.extend(assign.search_cases())
 
     '''
@@ -123,7 +140,7 @@ def main():
         ...
     }
     '''
-    scan_info_dict = defaultdict(dict)
+    scan_info_dict = defaultdict(dict)  # type: dict[str, dict]
     # store the test cases dir, exclude these folders when scan for standalone apps
     default_exclude = args.exclude if args.exclude else []
 
@@ -135,15 +152,16 @@ def main():
 
         if build_test_case_apps:
             scan_info_dict[target]['test_case_apps'] = set()
+            test_dirs = args.extra_test_dirs if args.extra_test_dirs else []
             for case in test_cases:
-                app_dir = case.case_info['app_dir']
-                app_target = case.case_info['target']
-                if app_target.lower() != target.lower():
-                    continue
+                if case.case_info['target'].lower() == target.lower():
+                    test_dirs.append(case.case_info['app_dir'])
+            for app_dir in test_dirs:
+                app_dir = os.path.join(idf_path, app_dir) if not os.path.isabs(app_dir) else app_dir
                 _apps = find_apps(build_system_class, app_dir, True, exclude_apps, target.lower())
                 if _apps:
                     scan_info_dict[target]['test_case_apps'].update(_apps)
-                    exclude_apps.append(app_dir)
+                    exclude_apps.extend(_apps)
         else:
             scan_info_dict[target]['test_case_apps'] = set()
 
@@ -154,7 +172,6 @@ def main():
                     find_apps(build_system_class, path, True, exclude_apps, target.lower()))
         else:
             scan_info_dict[target]['standalone_apps'] = set()
-
     test_case_apps_preserve_default = True if build_system == 'cmake' else False
     for target in SUPPORTED_TARGETS:
         apps = []
@@ -163,14 +180,14 @@ def main():
                 'app_dir': app_dir,
                 'build_system': args.build_system,
                 'target': target,
-                'preserve': args.preserve or test_case_apps_preserve_default
+                'preserve': args.preserve_all or test_case_apps_preserve_default
             })
         for app_dir in scan_info_dict[target]['standalone_apps']:
             apps.append({
                 'app_dir': app_dir,
                 'build_system': args.build_system,
                 'target': target,
-                'preserve': args.preserve
+                'preserve': args.preserve_all
             })
         output_path = os.path.join(args.output_path, 'scan_{}_{}.json'.format(target.lower(), build_system))
         with open(output_path, 'w') as fw:

@@ -1,16 +1,8 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at",
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License
+/*
+ * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <esp_types.h>
 #include <esp_err.h>
@@ -18,6 +10,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+//This is the ADC calibration value version burnt in efuse
+#define ESP_EFUSE_ADC_CALIB_VER     1
 
 /**
  * @brief Get the RTC calibration efuse version
@@ -29,11 +24,12 @@ int esp_efuse_rtc_calib_get_ver(void);
 /**
  * @brief Get the init code in the efuse, for the corresponding attenuation.
  *
- * @param version Version of the stored efuse
- * @param atten  Attenuation of the init code
+ * @param version   Version of the stored efuse
+ * @param adc_unit  ADC unit. Not used, for compatibility. On esp32c3, for calibration v1, both ADC units use the same init code (calibrated by ADC1)
+ * @param atten     Attenuation of the init code
  * @return The init code stored in efuse
  */
-uint16_t esp_efuse_rtc_calib_get_init_code(int version, int atten);
+uint32_t esp_efuse_rtc_calib_get_init_code(int version, uint32_t adc_unit, int atten);
 
 /**
  * @brief Get the calibration digits stored in the efuse, and the corresponding voltage.

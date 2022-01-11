@@ -61,6 +61,7 @@ static const spi_flash_host_driver_t esp_flash_gpspi_host = {
         .configure_host_io_mode = spi_flash_hal_gpspi_configure_host_io_mode,
         .poll_cmd_done = spi_flash_hal_gpspi_poll_cmd_done,
         .flush_cache = NULL,
+        .check_suspend = NULL,
         .resume = spi_flash_hal_resume,
         .suspend = spi_flash_hal_suspend,
 };
@@ -69,7 +70,7 @@ static const spi_flash_host_driver_t esp_flash_gpspi_host = {
 esp_err_t memspi_host_init_pointers(memspi_host_inst_t *host, const memspi_host_config_t *cfg)
 {
 #if SOC_MEMSPI_IS_INDEPENDENT
-    if (cfg->host_id == SPI_HOST)
+    if (cfg->host_id == SPI1_HOST)
         host->inst.driver = &esp_flash_default_host;
     else {
         host->inst.driver = &esp_flash_gpspi_host;
@@ -129,7 +130,7 @@ esp_err_t memspi_host_read_status_hs(spi_flash_host_inst_t *host, uint8_t *out_s
 
 esp_err_t memspi_host_flush_cache(spi_flash_host_inst_t *host, uint32_t addr, uint32_t size)
 {
-    if ((void*)((memspi_host_inst_t*)host)->spi == (void*) spi_flash_ll_get_hw(SPI_HOST)) {
+    if ((void*)((memspi_host_inst_t*)host)->spi == (void*) spi_flash_ll_get_hw(SPI1_HOST)) {
         spi_flash_check_and_flush_cache(addr, size);
     }
     return ESP_OK;
@@ -206,19 +207,47 @@ esp_err_t memspi_host_set_write_protect(spi_flash_host_inst_t *host, bool wp)
 // This is the simple case where the hardware has no other requirements than the size and page boundary
 int memspi_host_write_data_slicer(spi_flash_host_inst_t *host, uint32_t address, uint32_t len, uint32_t *align_address, uint32_t page_size)
 {
+    uint32_t slicer_flag = ((spi_flash_hal_context_t*)host)->slicer_flags;
     uint32_t align_addr = address;
+
+    if (slicer_flag & SPI_FLASH_HOST_CONTEXT_SLICER_FLAG_DTR) {
+        if (((align_addr % 2) != 0) && ((len % 2) != 0)) {
+            align_addr -= 1;
+            len += 1;
+        } else if (((align_addr % 2) != 0) && ((len % 2) == 0)) {
+            align_addr -= 1;
+            len += 2;
+        } else if (((align_addr % 2) == 0) && ((len % 2) != 0)) {
+            len += 1;
+        }
+    }
+
     uint32_t end_bound = (align_addr/page_size + 1) * page_size;
     // Shouldn't program cross the page, or longer than SPI_FLASH_HAL_MAX_WRITE_BYTES
     uint32_t max_len = MIN(end_bound - align_addr, SPI_FLASH_HAL_MAX_WRITE_BYTES);
-    *align_address = address;
+    *align_address = align_addr;
     return MIN(max_len, len);
 }
 
 int memspi_host_read_data_slicer(spi_flash_host_inst_t *host, uint32_t address, uint32_t len, uint32_t *align_address, uint32_t page_size)
 {
     // Shouldn't read longer than SPI_FLASH_HAL_MAX_READ_BYTES
+    uint32_t slicer_flag = ((spi_flash_hal_context_t*)host)->slicer_flags;
+    uint32_t align_addr = address;
+
+    if (slicer_flag & SPI_FLASH_HOST_CONTEXT_SLICER_FLAG_DTR) {
+        if (((align_addr % 2) != 0) && ((len % 2) != 0)) {
+            align_addr -= 1;
+            len += 1;
+        } else if (((align_addr % 2) != 0) && ((len % 2) == 0)) {
+            align_addr -= 1;
+            len += 2;
+        } else if (((align_addr % 2) == 0) && ((len % 2) != 0)) {
+            len += 1;
+        }
+    }
     uint32_t max_len = SPI_FLASH_HAL_MAX_READ_BYTES;
-    *align_address = address;
+    *align_address = align_addr;
     return MIN(max_len, len);
 }
 

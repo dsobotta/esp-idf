@@ -35,6 +35,7 @@
 #include "gatt_int.h"
 #include "osi/allocator.h"
 #include "osi/mutex.h"
+#include "bta_hh_int.h"
 
 #if (defined BTA_HH_LE_INCLUDED && BTA_HH_LE_INCLUDED == TRUE)
 #include "bta_hh_int.h"
@@ -304,7 +305,10 @@ void bta_gattc_deregister(tBTA_GATTC_CB *p_cb, tBTA_GATTC_RCB  *p_clreg)
             bta_gattc_deregister_cmpl(p_clreg);
         }
     } else {
-        APPL_TRACE_ERROR("bta_gattc_deregister Deregister Failedm unknown client cif");
+        APPL_TRACE_ERROR("Deregister Failed unknown client cif");
+#if defined(BTA_HH_INCLUDED) && (BTA_HH_INCLUDED == TRUE)
+        bta_hh_cleanup_disable(BTA_HH_OK);
+#endif
     }
 }
 /*******************************************************************************
@@ -490,9 +494,14 @@ void bta_gattc_open(tBTA_GATTC_CLCB *p_clcb, tBTA_GATTC_DATA *p_data)
 {
     tBTA_GATTC_DATA gattc_data;
     BOOLEAN found_app = FALSE;
+    tGATT_TCB *p_tcb;
 
-    tGATT_TCB *p_tcb = gatt_find_tcb_by_addr(p_data->api_conn.remote_bda, BT_TRANSPORT_LE);
-    if(p_tcb && p_clcb && p_data) {
+    if (!p_clcb || !p_data) {
+        return;
+    }
+
+    p_tcb = gatt_find_tcb_by_addr(p_data->api_conn.remote_bda, BT_TRANSPORT_LE);
+    if(p_tcb) {
         found_app = gatt_find_specific_app_in_hold_link(p_tcb, p_clcb->p_rcb->client_if);
     }
     /* open/hold a connection */
@@ -973,10 +982,11 @@ void bta_gattc_start_discover(tBTA_GATTC_CLCB *p_clcb, tBTA_GATTC_DATA *p_data)
             p_clcb->p_srcb->srvc_hdl_chg = FALSE;
             p_clcb->p_srcb->update_count = 0;
             p_clcb->p_srcb->state = BTA_GATTC_SERV_DISC_ACT;
-
+            #if (BT_MULTI_CONNECTION_ENBALE == FALSE)
             if (p_clcb->transport == BTA_TRANSPORT_LE) {
                 L2CA_EnableUpdateBleConnParams(p_clcb->p_srcb->server_bda, FALSE);
             }
+            #endif
 
             /* set all srcb related clcb into discovery ST */
             bta_gattc_set_discover_st(p_clcb->p_srcb);
@@ -1683,8 +1693,7 @@ static void bta_gattc_conn_cback(tGATT_IF gattc_if, BD_ADDR bda, UINT16 conn_id,
     tBTA_GATTC_DATA *p_buf;
 
     if (reason != 0) {
-        APPL_TRACE_WARNING("%s() - cif=%d connected=%d conn_id=%d reason=0x%04x",
-                           __FUNCTION__, gattc_if, connected, conn_id, reason);
+        APPL_TRACE_WARNING("gattc_conn_cb: if=%d st=%d id=%d rsn=0x%x", gattc_if, connected, conn_id, reason);
     }
 
     bt_bdaddr_t bdaddr;
@@ -1702,7 +1711,7 @@ static void bta_gattc_conn_cback(tGATT_IF gattc_if, BD_ADDR bda, UINT16 conn_id,
                 p_buf->int_conn.conn_params.latency = p_lcb->current_used_conn_latency;
                 p_buf->int_conn.conn_params.timeout = p_lcb->current_used_conn_timeout;
             } else {
-                APPL_TRACE_WARNING("%s not found connection parameters of the device ", __func__);
+                APPL_TRACE_WARNING("gattc_conn_cb: conn params not found");
             }
         }
         p_buf->int_conn.hdr.layer_specific   = conn_id;

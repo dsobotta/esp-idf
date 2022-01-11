@@ -98,10 +98,10 @@ def action_extensions(base_actions, project_path):
 
     def create_local_gdbinit(gdbinit, elf_file):
         with open(gdbinit, 'w') as f:
-            f.write('target remote :3333\n')
             if os.name == 'nt':
                 elf_file = elf_file.replace('\\','\\\\')
-            f.write('symbol-file {}\n'.format(elf_file))
+            f.write('file {}\n'.format(elf_file))
+            f.write('target remote :3333\n')
             f.write('mon reset halt\n')
             f.write('flushregs\n')
             f.write('thb app_main\n')
@@ -203,8 +203,13 @@ def action_extensions(base_actions, project_path):
             args += ['--port', gdbgui_port]
         gdbgui_out_name = os.path.join(local_dir, GDBGUI_OUT_FILE)
         gdbgui_out = open(gdbgui_out_name, 'a+')
+        env = os.environ.copy()
+        # The only known solution for https://github.com/cs01/gdbgui/issues/359 is to set the following environment
+        # variable. The greenlet package cannot be downgraded for compatibility with other requirements (gdbgui,
+        # pygdbmi).
+        env['PURE_PYTHON'] = '1'
         try:
-            process = subprocess.Popen(args, stdout=gdbgui_out, stderr=subprocess.STDOUT, bufsize=1)
+            process = subprocess.Popen(args, stdout=gdbgui_out, stderr=subprocess.STDOUT, bufsize=1, env=env)
         except Exception as e:
             print(e)
             raise FatalError('Error starting gdbgui. Please make sure gdbgui can be started', ctx)
@@ -362,8 +367,26 @@ def action_extensions(base_actions, project_path):
                 'options': [gdbinit, fail_if_openocd_failed],
                 'order_dependencies': ['all', 'flash'],
             },
+            'post-debug': {
+                'callback': post_debug,
+                'help': 'Utility target to read the output of async debug action and stop them.',
+                'options': [
+                    {
+                        'names': ['--block', '--block'],
+                        'help':
+                        ('Set to 1 for blocking the console on the outputs of async debug actions\n'),
+                        'default': 0,
+                    },
+                ],
+                'order_dependencies': [],
+            },
             'post_debug': {
                 'callback': post_debug,
+                'deprecated': {
+                    'removed': 'v5.0',
+                    'message': 'Please use "post-debug" instead.',
+                },
+                'hidden': True,
                 'help': 'Utility target to read the output of async debug action and stop them.',
                 'options': [
                     {

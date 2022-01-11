@@ -1,16 +1,8 @@
-// Copyright 2015-2018 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 
 #include <string.h>
@@ -259,6 +251,13 @@ static int http_on_headers_complete(http_parser *parser)
     client->response->data_process = 0;
     ESP_LOGD(TAG, "http_on_headers_complete, status=%d, offset=%d, nread=%d", parser->status_code, client->response->data_offset, parser->nread);
     client->state = HTTP_STATE_RES_COMPLETE_HEADER;
+    if (client->connection_info.method == HTTP_METHOD_HEAD) {
+        /* In a HTTP_RESPONSE parser returning '1' from on_headers_complete will tell the
+           parser that it should not expect a body. This is used when receiving a response
+           to a HEAD request which may contain 'Content-Length' or 'Transfer-Encoding: chunked'
+           headers that indicate the presence of a body.*/
+        return 1;
+    }
     return 0;
 }
 
@@ -348,7 +347,7 @@ esp_err_t esp_http_client_get_password(esp_http_client_handle_t client, char **v
     return ESP_OK;
 }
 
-esp_err_t esp_http_client_set_password(esp_http_client_handle_t client, char *password)
+esp_err_t esp_http_client_set_password(esp_http_client_handle_t client, const char *password)
 {
     if (client == NULL) {
         ESP_LOGE(TAG, "client must not be NULL");
@@ -510,11 +509,13 @@ static esp_err_t esp_http_client_prepare(esp_http_client_handle_t client)
 
         if (client->connection_info.auth_type == HTTP_AUTH_TYPE_BASIC) {
             auth_response = http_auth_basic(client->connection_info.username, client->connection_info.password);
+#ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_DIGEST_AUTH
         } else if (client->connection_info.auth_type == HTTP_AUTH_TYPE_DIGEST && client->auth_data) {
             client->auth_data->uri = client->connection_info.path;
             client->auth_data->cnonce = ((uint64_t)esp_random() << 32) + esp_random();
             auth_response = http_auth_digest(client->connection_info.username, client->connection_info.password, client->auth_data);
             client->auth_data->nc ++;
+#endif
         }
 
         if (auth_response) {
@@ -606,18 +607,40 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
         goto error;
     }
 
-    if (config->use_global_ca_store == true) {
+    if (config->crt_bundle_attach != NULL) {
+#ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+        esp_transport_ssl_crt_bundle_attach(ssl, config->crt_bundle_attach);
+#else //CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+        ESP_LOGE(TAG, "use_crt_bundle configured but not enabled in menuconfig: Please enable MBEDTLS_CERTIFICATE_BUNDLE option");
+#endif
+    } else if (config->use_global_ca_store == true) {
         esp_transport_ssl_enable_global_ca_store(ssl);
     } else if (config->cert_pem) {
-        esp_transport_ssl_set_cert_data(ssl, config->cert_pem, strlen(config->cert_pem));
+        if (!config->cert_len) {
+            esp_transport_ssl_set_cert_data(ssl, config->cert_pem, strlen(config->cert_pem));
+        } else {
+            esp_transport_ssl_set_cert_data_der(ssl, config->cert_pem, config->cert_len);
+        }
     }
 
     if (config->client_cert_pem) {
-        esp_transport_ssl_set_client_cert_data(ssl, config->client_cert_pem, strlen(config->client_cert_pem));
+        if (!config->client_cert_len) {
+            esp_transport_ssl_set_client_cert_data(ssl, config->client_cert_pem, strlen(config->client_cert_pem));
+        } else {
+            esp_transport_ssl_set_client_cert_data_der(ssl, config->client_cert_pem, config->client_cert_len);
+        }
     }
 
     if (config->client_key_pem) {
-        esp_transport_ssl_set_client_key_data(ssl, config->client_key_pem, strlen(config->client_key_pem));
+        if (!config->client_key_len) {
+            esp_transport_ssl_set_client_key_data(ssl, config->client_key_pem, strlen(config->client_key_pem));
+        } else {
+            esp_transport_ssl_set_client_key_data_der(ssl, config->client_key_pem, config->client_key_len);
+        }
+    }
+
+    if (config->client_key_password && config->client_key_password_len > 0) {
+        esp_transport_ssl_set_client_key_password(ssl, config->client_key_password, config->client_key_password_len);
     }
 
     if (config->skip_cert_common_name_check) {
@@ -708,7 +731,9 @@ esp_err_t esp_http_client_cleanup(esp_http_client_handle_t client)
         return ESP_FAIL;
     }
     esp_http_client_close(client);
-    esp_transport_list_destroy(client->transport_list);
+    if (client->transport_list) {
+        esp_transport_list_destroy(client->transport_list);
+    }
     if (client->request) {
         http_header_destroy(client->request->headers);
         if (client->request->buffer) {
@@ -880,9 +905,28 @@ esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *u
     return ESP_OK;
 }
 
+int esp_http_client_get_errno(esp_http_client_handle_t client)
+{
+    if (!client) {
+        ESP_LOGE(TAG, "Invalid client handle");
+        return -1;
+    }
+    return esp_transport_get_errno(client->transport);
+}
+
 esp_err_t esp_http_client_set_method(esp_http_client_handle_t client, esp_http_client_method_t method)
 {
     client->connection_info.method = method;
+    return ESP_OK;
+}
+
+esp_err_t esp_http_client_set_timeout_ms(esp_http_client_handle_t client, int timeout_ms)
+{
+    if (client == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    client->timeout_ms = timeout_ms;
     return ESP_OK;
 }
 
@@ -971,11 +1015,19 @@ int esp_http_client_read(esp_http_client_handle_t client, char *buffer, int len)
                 }
                 ESP_LOG_LEVEL(sev, TAG, "esp_transport_read returned:%d and errno:%d ", rlen, errno);
             }
-            if (rlen < 0 && ridx == 0) {
-                return ESP_FAIL;
-            } else {
+#ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS
+            if (rlen == ESP_TLS_ERR_SSL_WANT_READ || errno == EAGAIN) {
+#else
+            if (errno == EAGAIN) {
+#endif
+                ESP_LOGD(TAG, "Received EAGAIN! rlen = %d, errno %d", rlen, errno);
                 return ridx;
             }
+            if (rlen < 0 && ridx == 0 && !esp_http_client_is_complete_data_received(client)) {
+                http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
+                return ESP_FAIL;
+            }
+            return ridx;
         }
         res_buffer->output_ptr = buffer + ridx;
         http_parser_execute(client->parser, client->parser_settings, res_buffer->data, rlen);
@@ -1006,6 +1058,7 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t client)
                     if (client->is_async && err == ESP_ERR_HTTP_CONNECTING) {
                         return ESP_ERR_HTTP_EAGAIN;
                     }
+                    http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
                     return err;
                 }
                 /* falls through */
@@ -1014,6 +1067,7 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t client)
                     if (client->is_async && errno == EAGAIN) {
                         return ESP_ERR_HTTP_EAGAIN;
                     }
+                    http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
                     return err;
                 }
                 /* falls through */
@@ -1022,6 +1076,7 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t client)
                     if (client->is_async && errno == EAGAIN) {
                         return ESP_ERR_HTTP_EAGAIN;
                     }
+                    http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
                     return err;
                 }
                 /* falls through */
@@ -1030,12 +1085,20 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t client)
                     if (client->is_async && errno == EAGAIN) {
                         return ESP_ERR_HTTP_EAGAIN;
                     }
+                    if (esp_transport_get_errno(client->transport) == ENOTCONN) {
+                        ESP_LOGW(TAG, "Close connection due to FIN received");
+                        esp_http_client_close(client);
+                        http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
+                        return ESP_ERR_HTTP_CONNECTION_CLOSED;
+                    }
+                    http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
                     return ESP_ERR_HTTP_FETCH_HEADER;
                 }
                 /* falls through */
             case HTTP_STATE_RES_COMPLETE_HEADER:
                 if ((err = esp_http_check_response(client)) != ESP_OK) {
                     ESP_LOGE(TAG, "Error response");
+                    http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
                     return err;
                 }
                 while (client->response->is_chunked && !client->is_chunk_complete) {
@@ -1159,7 +1222,6 @@ static int http_client_prepare_first_line(esp_http_client_handle_t client, int w
         http_header_set_format(client->request->headers, "Content-Length", "%d", write_len);
     } else {
         esp_http_client_set_header(client, "Transfer-Encoding", "chunked");
-        esp_http_client_set_method(client, HTTP_METHOD_POST);
     }
 
     const char *method = HTTP_METHOD_MAPPING[client->connection_info.method];
@@ -1286,9 +1348,11 @@ esp_err_t esp_http_client_open(esp_http_client_handle_t client, int write_len)
     client->post_len = write_len;
     esp_err_t err;
     if ((err = esp_http_client_connect(client)) != ESP_OK) {
+        http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
         return err;
     }
     if ((err = esp_http_client_request_send(client, write_len)) != ESP_OK) {
+        http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
         return err;
     }
     return ESP_OK;
@@ -1398,19 +1462,27 @@ void esp_http_client_add_auth(esp_http_client_handle_t client)
         http_utils_trim_whitespace(&auth_header);
         ESP_LOGD(TAG, "UNAUTHORIZED: %s", auth_header);
         client->redirect_counter++;
+#ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_DIGEST_AUTH
         if (http_utils_str_starts_with(auth_header, "Digest") == 0) {
             ESP_LOGD(TAG, "type = Digest");
             client->connection_info.auth_type = HTTP_AUTH_TYPE_DIGEST;
+        } else {
+#endif
 #ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH
-        } else if (http_utils_str_starts_with(auth_header, "Basic") == 0) {
+        if (http_utils_str_starts_with(auth_header, "Basic") == 0) {
             ESP_LOGD(TAG, "type = Basic");
             client->connection_info.auth_type = HTTP_AUTH_TYPE_BASIC;
-#endif
         } else {
+#endif
             client->connection_info.auth_type = HTTP_AUTH_TYPE_NONE;
             ESP_LOGE(TAG, "This authentication method is not supported: %s", auth_header);
             return;
+#ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH
         }
+#endif
+#ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_DIGEST_AUTH
+        }
+#endif
 
         _clear_auth_data(client);
 

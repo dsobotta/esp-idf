@@ -211,7 +211,7 @@ void app_main(void)
     touch_pad_config(TOUCH_PAD_NUM9, TOUCH_THRESH_NO_USE);
     calibrate_touch_pad(TOUCH_PAD_NUM8);
     calibrate_touch_pad(TOUCH_PAD_NUM9);
-#elif CONFIG_IDF_TARGET_ESP32S2
+#elif CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3
     /* Initialize touch pad peripheral. */
     touch_pad_init();
     /* Only support one touch channel in sleep mode. */
@@ -239,15 +239,19 @@ void app_main(void)
     /* Set sleep touch pad. */
     touch_pad_sleep_channel_enable(TOUCH_PAD_NUM9, true);
     touch_pad_sleep_channel_enable_proximity(TOUCH_PAD_NUM9, false);
+    /* Reducing the operating frequency can effectively reduce power consumption. */
+    touch_pad_sleep_channel_set_work_time(1000, TOUCH_PAD_MEASURE_CYCLE_DEFAULT);
     /* Enable touch sensor clock. Work mode is "timer trigger". */
     touch_pad_set_fsm_mode(TOUCH_FSM_MODE_TIMER);
     touch_pad_fsm_start();
     vTaskDelay(100 / portTICK_RATE_MS);
-    /* read sleep touch pad value */
-    uint32_t touch_value;
+
+    /* set touchpad wakeup threshold */
+    uint32_t touch_value, wake_threshold;
     touch_pad_sleep_channel_read_smooth(TOUCH_PAD_NUM9, &touch_value);
-    touch_pad_sleep_set_threshold(TOUCH_PAD_NUM9, touch_value * 0.1); //10%
-    printf("test init: touch pad [%d] slp %d, thresh %d\n",
+    wake_threshold = touch_value * 0.1; // wakeup when touch sensor crosses 10% of background level
+    touch_pad_sleep_set_threshold(TOUCH_PAD_NUM9, wake_threshold);
+    printf("Touch pad #%d average: %d, wakeup threshold set to %d\n",
         TOUCH_PAD_NUM9, touch_value, (uint32_t)(touch_value * 0.1));
 #endif
     printf("Enabling touch pad wakeup\n");

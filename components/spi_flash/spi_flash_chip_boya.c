@@ -17,12 +17,6 @@
 #include "spi_flash_chip_gd.h"
 #include "spi_flash_defs.h"
 
-/* Driver for BOYA flash chip */
-esp_err_t spi_flash_chip_gd_suspend_cmd_conf(esp_flash_t *chip);
-
-// Use the same implementation as GD chips
-#define spi_flash_chip_boya_suspend_cmd_conf spi_flash_chip_gd_suspend_cmd_conf
-
 esp_err_t spi_flash_chip_boya_probe(esp_flash_t *chip, uint32_t flash_id)
 {
     /* Check manufacturer and product IDs match our desired masks */
@@ -38,6 +32,16 @@ esp_err_t spi_flash_chip_boya_probe(esp_flash_t *chip, uint32_t flash_id)
     }
 
     return ESP_OK;
+}
+
+spi_flash_caps_t spi_flash_chip_boya_get_caps(esp_flash_t *chip)
+{
+    spi_flash_caps_t caps_flags = 0;
+    // 32-bit-address flash is not supported
+    // flash-suspend is not supported
+    // flash read unique id.
+    caps_flags |= SPI_FLASH_CHIP_CAP_UNIQUE_ID;
+    return caps_flags;
 }
 
 static const char chip_name[] = "boya";
@@ -76,5 +80,8 @@ const spi_flash_chip_t esp_flash_chip_boya = {
 
     .read_reg = spi_flash_chip_generic_read_reg,
     .yield = spi_flash_chip_generic_yield,
-    .sus_setup = spi_flash_chip_boya_suspend_cmd_conf,
+    .sus_setup = spi_flash_chip_generic_suspend_cmd_conf,
+    .read_unique_id = spi_flash_chip_generic_read_unique_id,
+    .get_chip_caps = spi_flash_chip_boya_get_caps,
+    .config_host_io_mode = spi_flash_chip_generic_config_host_io_mode,
 };

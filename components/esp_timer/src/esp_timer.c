@@ -1,16 +1,8 @@
-// Copyright 2017 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <sys/param.h>
 #include <string.h>
@@ -39,6 +31,8 @@
 #include "esp32s3/rtc.h"
 #elif CONFIG_IDF_TARGET_ESP32C3
 #include "esp32c3/rtc.h"
+#elif CONFIG_IDF_TARGET_ESP32H2
+#include "esp32h2/rtc.h"
 #endif
 
 #include "sdkconfig.h"
@@ -426,6 +420,15 @@ static IRAM_ATTR inline bool is_initialized(void)
     return s_timer_task != NULL;
 }
 
+esp_err_t esp_timer_early_init(void)
+{
+    esp_timer_impl_early_init();
+#if CONFIG_ESP_TIME_FUNCS_USE_ESP_TIMER
+    esp_timer_impl_init_system_time();
+#endif
+    return ESP_OK;
+}
+
 esp_err_t esp_timer_init(void)
 {
     esp_err_t err;
@@ -444,12 +447,6 @@ esp_err_t esp_timer_init(void)
     if (err != ESP_OK) {
         goto out;
     }
-
-#if CONFIG_ESP_TIME_FUNCS_USE_ESP_TIMER
-    // [refactor-todo] this logic, "esp_rtc_get_time_us() - g_startup_time", is also
-    // the weak definition of esp_system_get_time; find a way to remove this duplication.
-    esp_timer_private_advance(esp_rtc_get_time_us() - g_startup_time);
-#endif
 
     return ESP_OK;
 
@@ -601,16 +598,30 @@ int64_t IRAM_ATTR esp_timer_get_next_alarm(void)
     return next_alarm;
 }
 
-// Provides strong definition for system time functions relied upon
-// by core components.
-#if CONFIG_ESP_TIME_FUNCS_USE_ESP_TIMER
-int64_t IRAM_ATTR esp_system_get_time(void)
+int64_t IRAM_ATTR esp_timer_get_next_alarm_for_wake_up(void)
 {
-    return esp_timer_get_time();
+    int64_t next_alarm = INT64_MAX;
+    for (esp_timer_dispatch_t dispatch_method = ESP_TIMER_TASK; dispatch_method < ESP_TIMER_MAX; ++dispatch_method) {
+        timer_list_lock(dispatch_method);
+        esp_timer_handle_t it;
+        LIST_FOREACH(it, &s_timers[dispatch_method], list_entry) {
+            if (it == NULL) {
+                break;
+            }
+            // timers with the SKIP_UNHANDLED_EVENTS flag do not want to wake up CPU from a sleep mode.
+            if ((it->flags & FL_SKIP_UNHANDLED_EVENTS) == 0) {
+                if (next_alarm > it->alarm) {
+                    next_alarm = it->alarm;
+                }
+                break;
+            }
+        }
+        timer_list_unlock(dispatch_method);
+    }
+    return next_alarm;
 }
 
-uint32_t IRAM_ATTR esp_system_get_time_resolution(void)
+bool esp_timer_is_active(esp_timer_handle_t timer)
 {
-    return 1000;
+    return timer_armed(timer);
 }
-#endif

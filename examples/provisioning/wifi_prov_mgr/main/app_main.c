@@ -45,6 +45,9 @@ static EventGroupHandle_t wifi_event_group;
 static void event_handler(void* arg, esp_event_base_t event_base,
                           int32_t event_id, void* event_data)
 {
+#ifdef CONFIG_EXAMPLE_RESET_PROV_MGR_ON_FAILURE
+    static int retries;
+#endif
     if (event_base == WIFI_PROV_EVENT) {
         switch (event_id) {
             case WIFI_PROV_START:
@@ -64,10 +67,21 @@ static void event_handler(void* arg, esp_event_base_t event_base,
                          "\n\tPlease reset to factory and retry provisioning",
                          (*reason == WIFI_PROV_STA_AUTH_ERROR) ?
                          "Wi-Fi station authentication failed" : "Wi-Fi access-point not found");
+#ifdef CONFIG_EXAMPLE_RESET_PROV_MGR_ON_FAILURE
+                retries++;
+                if (retries >= CONFIG_EXAMPLE_PROV_MGR_MAX_RETRY_CNT) {
+                    ESP_LOGI(TAG, "Failed to connect with provisioned AP, reseting provisioned credentials");
+                    wifi_prov_mgr_reset_sm_state_on_failure();
+                    retries = 0;
+                }
+#endif
                 break;
             }
             case WIFI_PROV_CRED_SUCCESS:
                 ESP_LOGI(TAG, "Provisioning successful");
+#ifdef CONFIG_EXAMPLE_RESET_PROV_MGR_ON_FAILURE
+                retries = 0;
+#endif
                 break;
             case WIFI_PROV_END:
                 /* De-initialize manager once provisioning is finished */
@@ -271,6 +285,10 @@ void app_main(void)
             0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
             0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
         };
+
+        /* If your build fails with linker errors at this point, then you may have
+         * forgotten to enable the BT stack or BTDM BLE settings in the SDK (e.g. see
+         * the sdkconfig.defaults in the example project) */
         wifi_prov_scheme_ble_set_service_uuid(custom_service_uuid);
 #endif /* CONFIG_EXAMPLE_PROV_TRANSPORT_BLE */
 

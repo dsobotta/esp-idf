@@ -1,7 +1,13 @@
+/*
+ * SPDX-FileCopyrightText: 2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 #include "test/test_common_spi.h"
 #include "driver/spi_slave.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
+#include "hal/gpio_hal.h"
 
 int test_freq_default[]=TEST_FREQ_DEFAULT();
 
@@ -202,13 +208,13 @@ void master_free_device_bus(spi_device_handle_t spi)
 
 void spitest_gpio_output_sel(uint32_t gpio_num, int func, uint32_t signal_idx)
 {
-    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[gpio_num], func);
+    gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[gpio_num], func);
     GPIO.func_out_sel_cfg[gpio_num].func_sel = signal_idx;
 }
 
 void spitest_gpio_input_sel(uint32_t gpio_num, int func, uint32_t signal_idx)
 {
-    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[gpio_num], func);
+    gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[gpio_num], func);
     GPIO.func_in_sel_cfg[signal_idx].func_sel = gpio_num;
 }
 
@@ -231,4 +237,13 @@ void same_pin_func_sel(spi_bus_config_t bus, spi_device_interface_config_t dev, 
 #if CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3
     GPIO.func_in_sel_cfg[FSPIQ_IN_IDX].sig_in_sel = 1;
 #endif
+}
+
+void get_tx_buffer(uint32_t seed, uint8_t *master_send_buf, uint8_t *slave_send_buf, int send_buf_size)
+{
+    srand(seed);
+    for (int i = 0; i < send_buf_size; i++) {
+        slave_send_buf[i] = rand();
+        master_send_buf[i] = rand();
+    }
 }

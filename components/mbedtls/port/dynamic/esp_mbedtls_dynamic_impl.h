@@ -1,20 +1,14 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
+/*
+ * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef _DYNAMIC_IMPL_H_
 #define _DYNAMIC_IMPL_H_
 
 #include <stddef.h>
+#include <string.h>
 #include "mbedtls/ssl.h"
 #include "mbedtls/ssl_internal.h"
 #include "mbedtls/platform.h"
@@ -40,6 +34,21 @@
     TRACE_CHECK(_fn, "end"); \
  \
 })
+
+typedef enum {
+    ESP_MBEDTLS_SSL_BUF_CACHED,
+    ESP_MBEDTLS_SSL_BUF_NO_CACHED,
+} esp_mbedtls_ssl_buf_states;
+
+struct esp_mbedtls_ssl_buf {
+    esp_mbedtls_ssl_buf_states state;
+    unsigned int len;
+    unsigned char buf[];
+};
+
+#define SSL_BUF_HEAD_OFFSET_SIZE offsetof(struct esp_mbedtls_ssl_buf, buf)
+
+void esp_mbedtls_free_buf(unsigned char *buf);
 
 int esp_mbedtls_setup_tx_buffer(mbedtls_ssl_context *ssl);
 

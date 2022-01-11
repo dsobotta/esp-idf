@@ -15,13 +15,17 @@ An interrupt level of the handler depends on the :ref:`CONFIG_ESP_TIMER_INTERRUP
 
 ``esp_timer`` set of APIs provides one-shot and periodic timers, microsecond time resolution, and 64-bit range.
 
-Internally, ``esp_timer`` uses a 64-bit hardware timer :ref:`CONFIG_ESP_TIMER_IMPL`:
+Internally, ``esp_timer`` uses a 64-bit hardware timer, where the implemention depends on :ref:`CONFIG_ESP_TIMER_IMPL`. Available options are:
 
-- LAC timer (ESP32)
-- (legacy) FRC2 timer (ESP32)
-- SYSTIMER for (ESP32-S2)
+.. list::
 
-.. note: The FRC2 is a legacy option for ESP32 until v4.2, a 32-bit hardware timer was used. Starting at v4.2, use the new LAC timer option instead, it has a simpler implementation, and has smaller run time overhead because software handling of timer overflow is not needed.
+    :esp32: - LAC timer
+    :esp32: - (legacy) FRC2 timer
+    :not esp32: - SYSTIMER
+
+.. only:: esp32
+
+    .. note:: The FRC2 is a legacy option for ESP32 until v4.2, a 32-bit hardware timer was used. Starting at v4.2, use the new LAC timer option instead, it has a simpler implementation, and has smaller run time overhead because software handling of timer overflow is not needed.
 
 Timer callbacks can dispatched by two methods:
 
@@ -59,7 +63,7 @@ Callback functions
 
 .. note: Keep the callback functions as short as possible otherwise it will affect all timers.
 
-Timer callbacks which are processed by ``ESP_TIMER_ISR`` method should not have inside the context switch call - ``portYIELD_FROM_ISR()`` instead of this use the :cpp:func:`esp_timer_isr_dispatch_need_yield` function.
+Timer callbacks which are processed by ``ESP_TIMER_ISR`` method should not call the context switch call - ``portYIELD_FROM_ISR()``, instead of this you should use the :cpp:func:`esp_timer_isr_dispatch_need_yield` function.
 The context switch will be done after all ISR dispatch timers have been processed, if required by the system.
 
 esp_timer during the light sleep
@@ -77,6 +81,8 @@ In some cases, this can be inconvenient, and instead of the stop function,
 you can use the `skip_unhandled_events` option during :cpp:func:`esp_timer_create`.
 When the `skip_unhandled_events` is true, if a periodic timer expires one or more times during light sleep
 then only one callback is called on wake.
+
+Using the `skip_unhandled_events` option with `automatic light sleep` (see :doc:`Power Management APIs <power_management>`) helps to reduce the consumption of the system when it is in light sleep. The duration of light sleep is also determined by esp_timers. Timers with `skip_unhandled_events` option will not wake up the system.
 
 Handling callbacks
 ------------------

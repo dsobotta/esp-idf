@@ -13,9 +13,39 @@
 // limitations under the License.
 
 #include <stdlib.h>
+#include <string.h>
+#include <sys/param.h> // For MIN/MAX
+#include "esp_log.h"
 #include "spi_flash_chip_generic.h"
 #include "spi_flash_chip_gd.h"
 #include "spi_flash_defs.h"
+
+#define ADDR_32BIT(addr)            (addr >= (1<<24))
+
+#define REGION_32BIT(start, len)    ((start) + (len) > (1<<24))
+
+extern esp_err_t spi_flash_chip_winbond_read(esp_flash_t *chip, void *buffer, uint32_t address, uint32_t length);
+extern esp_err_t spi_flash_chip_winbond_page_program(esp_flash_t *chip, const void *buffer, uint32_t address, uint32_t length);
+extern esp_err_t spi_flash_chip_winbond_erase_sector(esp_flash_t *chip, uint32_t start_address);
+extern esp_err_t spi_flash_chip_winbond_erase_block(esp_flash_t *chip, uint32_t start_address);
+
+#define spi_flash_chip_gd_read spi_flash_chip_winbond_read
+#define spi_flash_chip_gd_page_program spi_flash_chip_winbond_page_program
+#define spi_flash_chip_gd_erase_sector spi_flash_chip_winbond_erase_sector
+#define spi_flash_chip_gd_erase_block spi_flash_chip_winbond_erase_block
+
+spi_flash_caps_t spi_flash_chip_gd_get_caps(esp_flash_t *chip)
+{
+    spi_flash_caps_t caps_flags = 0;
+    // 32M-bits address support
+    if ((chip->chip_id & 0xFF) >= 0x19) {
+        caps_flags |= SPI_FLASH_CHIP_CAP_32MB_SUPPORT;
+    }
+    // flash-suspend is not supported
+    // flash read unique id.
+    caps_flags |= SPI_FLASH_CHIP_CAP_UNIQUE_ID;
+    return caps_flags;
+}
 
 #ifndef CONFIG_SPI_FLASH_ROM_IMPL
 
@@ -75,18 +105,6 @@ esp_err_t spi_flash_chip_gd_get_io_mode(esp_flash_t *chip, esp_flash_io_mode_t* 
 }
 #endif //CONFIG_SPI_FLASH_ROM_IMPL
 
-esp_err_t spi_flash_chip_gd_suspend_cmd_conf(esp_flash_t *chip)
-{
-    spi_flash_sus_cmd_conf sus_conf = {
-        .sus_mask = 0x84,
-        .cmd_rdsr = CMD_RDSR2,
-        .sus_cmd = CMD_SUSPEND,
-        .res_cmd = CMD_RESUME,
-    };
-
-    return chip->host->driver->sus_setup(chip->host, &sus_conf);
-}
-
 static const char chip_name[] = "gd";
 
 // The issi chip can use the functions for generic chips except from set read mode and probe,
@@ -98,8 +116,8 @@ const spi_flash_chip_t esp_flash_chip_gd = {
     .reset = spi_flash_chip_generic_reset,
     .detect_size = spi_flash_chip_generic_detect_size,
     .erase_chip = spi_flash_chip_generic_erase_chip,
-    .erase_sector = spi_flash_chip_generic_erase_sector,
-    .erase_block = spi_flash_chip_generic_erase_block,
+    .erase_sector = spi_flash_chip_gd_erase_sector,
+    .erase_block = spi_flash_chip_gd_erase_block,
     .sector_size = 4 * 1024,
     .block_erase_size = 64 * 1024,
 
@@ -111,9 +129,9 @@ const spi_flash_chip_t esp_flash_chip_gd = {
     .get_protected_regions = NULL,
     .set_protected_regions = NULL,
 
-    .read = spi_flash_chip_generic_read,
+    .read = spi_flash_chip_gd_read,
     .write = spi_flash_chip_generic_write,
-    .program_page = spi_flash_chip_generic_page_program,
+    .program_page = spi_flash_chip_gd_page_program,
     .page_size = 256,
     .write_encrypted = spi_flash_chip_generic_write_encrypted,
 
@@ -123,5 +141,8 @@ const spi_flash_chip_t esp_flash_chip_gd = {
 
     .read_reg = spi_flash_chip_generic_read_reg,
     .yield = spi_flash_chip_generic_yield,
-    .sus_setup = spi_flash_chip_gd_suspend_cmd_conf,
+    .sus_setup = spi_flash_chip_generic_suspend_cmd_conf,
+    .read_unique_id = spi_flash_chip_generic_read_unique_id,
+    .get_chip_caps = spi_flash_chip_gd_get_caps,
+    .config_host_io_mode = spi_flash_chip_generic_config_host_io_mode,
 };

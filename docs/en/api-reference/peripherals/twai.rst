@@ -1,5 +1,5 @@
-TWAI
-====
+Two-Wire Automotive Interface (TWAI)
+====================================
 
 .. -------------------------------- Overview -----------------------------------
 
@@ -124,6 +124,8 @@ The TWAI driver contains an alert feature that is used to notify the application
       - No more messages queued for transmission
     * - ``TWAI_ALERT_TX_SUCCESS``
       - The previous transmission was successful
+    * - ``TWAI_ALERT_RX_DATA``
+      - A frame has been received and added to the RX queue
     * - ``TWAI_ALERT_BELOW_ERR_WARN``
       - Both error counters have dropped below error warning limit
     * - ``TWAI_ALERT_ERR_ACTIVE``
@@ -165,7 +167,7 @@ The operating bit rate of the TWAI driver is configured using the :cpp:type:`twa
     2. **Timing Segment 1** consists of 1 to 16 time quanta before sample point
     3. **Timing Segment 2** consists of 1 to 8 time quanta after sample point
 
-{IDF_TARGET_MAX_BRP:default="128", esp32="128", esp32s2="32768"}
+{IDF_TARGET_MAX_BRP:default="128", esp32="128", esp32s2="32768", esp32c3="16384"}
 
 The **Baudrate Prescaler** is used to determine the period of each time quantum by dividing the TWAI controller's source clock (80 MHz APB clock). On the {IDF_TARGET_NAME}, the ``brp`` can be **any even number from 2 to {IDF_TARGET_MAX_BRP}**.
 
@@ -202,6 +204,12 @@ Bit timing **macro initializers** are also available for commonly used bit rates
     :esp32s2: - ``TWAI_TIMING_CONFIG_10KBITS()``
     :esp32s2: - ``TWAI_TIMING_CONFIG_5KBITS()``
     :esp32s2: - ``TWAI_TIMING_CONFIG_1KBITS()``
+    :esp32c3: - ``TWAI_TIMING_CONFIG_20KBITS()``
+    :esp32c3: - ``TWAI_TIMING_CONFIG_16KBITS()``
+    :esp32c3: - ``TWAI_TIMING_CONFIG_12_5KBITS()``
+    :esp32c3: - ``TWAI_TIMING_CONFIG_10KBITS()``
+    :esp32c3: - ``TWAI_TIMING_CONFIG_5KBITS()``
+    :esp32c3: - ``TWAI_TIMING_CONFIG_1KBITS()``
 
 .. only:: esp32
 

@@ -55,7 +55,10 @@ typedef struct multi_heap_info cmpct_heap_t;
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#ifndef CONFIG_IDF_TARGET_ESP32C3
 #include "xtensa/core-macros.h"
+#endif
 
 #include "../../multi_heap_platform.h"
 
